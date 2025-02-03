@@ -1,10 +1,15 @@
 from typing import Dict, List, Tuple, Optional
 import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
+import random
 from .game_state import GameState
 from .board import PlayerBoard
+from .piece import Piece, PieceColor
 
-class AzulEnv:
-    """Azul游戏环境，遵循OpenAI Gym风格的接口"""
+class AzulEnv(gym.Env):
+    """Azul游戏环境, 遵循OpenAI Gym风格的接口"""
+    metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': 4}
     
     # 动作空间定义
     # action = (source_type, source_idx, color, target_type, target_idx)
@@ -14,8 +19,21 @@ class AzulEnv:
     # target_type: 0=准备区, 1=扣分区
     # target_idx: 目标行/列的索引
     
+    # 类属性：所有实例共享
+    PIECES_PER_COLOR = 20  # 每种颜色的瓷砖数量
+    PIECES_PER_DISK = 4    # 每个圆盘的瓷砖数量
+    
     def __init__(self):
-        """初始化游戏环境"""
+        """构造方法：初始化实例"""
+        super().__init__()  # 调用父类初始化
+        
+        # 定义动作空间和观察空间
+        self.action_space = spaces.MultiDiscrete([2, 5, 5, 2, 5])  # (source_type, source_idx, color, target_type, target_idx)
+        
+        # 计算观察空间的维度
+        obs_dim = 100 + 5 + 50 + 50 + 14 + 1 + 1  # 221维
+        self.observation_space = spaces.Box(low=0, high=5, shape=(obs_dim,), dtype=np.float32)
+        
         # 颜色映射
         self.COLORS = {
             'BLUE': 0,
@@ -42,7 +60,7 @@ class AzulEnv:
         self.first_piece = None
         
     def reset(self) -> np.ndarray:
-        """重置环境到初始状态，返回初始观察"""
+        """实例方法：重置环境"""
         self.__init__()
         self.state = GameState.RUNNING
         self.start_new_round()
@@ -247,11 +265,212 @@ class AzulEnv:
         
     def _execute_action(self, source_type: int, source_idx: int, color: int, 
                        target_type: int, target_idx: int) -> float:
-        """执行动作并返回即时奖励"""
-        # 实现动作执行逻辑
-        pass
+        """
+        执行动作并返回即时奖励
+        
+        Args:
+            source_type (int): 源位置类型 (0=圆盘, 1=待定区)
+            source_idx (int): 源位置索引
+            color (int): 选择的颜色
+            target_type (int): 目标位置类型 (0=准备区, 1=扣分区)
+            target_idx (int): 目标位置索引
+            
+        Returns:
+            float: 即时奖励值
+        """
+        # 获取当前玩家的棋盘
+        current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        
+        # 获取要移动的瓷砖
+        pieces_to_move = []
+        other_pieces = []
+        source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
+        
+        # 从源位置收集瓷砖
+        for piece in source_pieces[:]:
+            if piece.is_first:  # 如果是先手标记
+                pieces_to_move.append(piece)
+                source_pieces.remove(piece)
+            elif piece.color == PieceColor(color):  # 如果是选中的颜色
+                pieces_to_move.append(piece)
+                source_pieces.remove(piece)
+            else:  # 其他颜色的瓷砖
+                other_pieces.append(piece)
+                source_pieces.remove(piece)
+                
+        # 如果是从圆盘取瓷砖，将其他颜色的瓷砖移到待定区
+        if source_type == 0 and other_pieces:
+            self.waiting_area.extend(other_pieces)
+            
+        # 处理瓷砖放置
+        if target_type == 0:  # 放入准备区
+            remaining = current_board.add_pieces(target_idx, pieces_to_move)
+            if remaining:  # 如果有剩余瓷砖，放入扣分区
+                current_board.add_to_penalty(remaining)
+        else:  # 直接放入扣分区
+            current_board.add_to_penalty(pieces_to_move)
+            
+        # 计算即时奖励（可以根据具体规则调整）
+        reward = 0.0
+        if target_type == 0:  # 放入准备区给予小额正奖励
+            reward = 0.1
+        else:  # 放入扣分区给予小额负奖励
+            reward = -0.1
+            
+        return reward
         
     def _calculate_reward(self, action_result: Dict) -> float:
         """计算奖励值"""
         # 实现奖励计算逻辑
         pass 
+
+    def render(self, mode='human'):
+        """渲染当前游戏状态"""
+        # TODO: 实现渲染逻辑
+        pass
+        
+    def _initialize_piece_pool(self) -> List[Piece]:
+        """
+        初始化瓷砖池
+        
+        Returns:
+            List[Piece]: 包含所有瓷砖的列表
+        """
+        piece_pool = []
+        
+        # 为每种颜色创建指定数量的瓷砖
+        for color in PieceColor:
+            if color != PieceColor.NONE:  # 跳过NONE颜色
+                for _ in range(self.PIECES_PER_COLOR):
+                    piece_pool.append(Piece(color=color))
+                    
+        # 创建先手标记
+        self.first_piece = Piece.create_first_player_marker()
+        
+        # 随机打乱瓷砖顺序
+        random.shuffle(piece_pool)
+        
+        return piece_pool
+        
+    def _need_scoring(self) -> bool:
+        """检查是否需要进行结算"""
+        # TODO: 实现结算检查
+        pass
+        
+    def _perform_scoring(self) -> float:
+        """执行结算并返回得分"""
+        # TODO: 实现结算逻辑
+        pass
+        
+    def _check_game_end(self) -> bool:
+        """检查游戏是否结束"""
+        # TODO: 实现游戏结束检查
+        pass
+        
+    def _calculate_final_reward(self) -> float:
+        """计算游戏结束时的最终奖励"""
+        # TODO: 实现最终奖励计算
+        pass
+        
+    def _get_info(self) -> Dict:
+        """获取额外信息"""
+        return {
+            'current_player': self.current_player,
+            'round': self.round_count,
+            'player1_score': self.player1_board.score,
+            'player2_score': self.player2_board.score
+        }
+        
+    def start_new_round(self):
+        """
+        开始新的回合
+        
+        1. 重置圆盘和待定区
+        2. 将瓷砖分配到圆盘
+        3. 处理剩余瓷砖
+        4. 设置回合状态
+        """
+        # 重置游戏区域
+        self.disks = [[] for _ in range(5)]  # 5个圆盘
+        self.waiting_area = []
+        
+        # 如果是第一回合或瓷砖池为空，重新初始化瓷砖池
+        if not self.piece_pool:
+            self.piece_pool = self._initialize_piece_pool()
+            
+        # 将先手标记放入待定区（如果不在玩家手中）
+        if self.first_piece.position is None:
+            self.waiting_area.append(self.first_piece)
+            
+        # 将瓷砖分配到圆盘
+        for disk_idx in range(5):
+            pieces_to_add = min(self.PIECES_PER_DISK, len(self.piece_pool))
+            if pieces_to_add == 0:
+                break
+                
+            # 取出瓷砖并添加到圆盘
+            disk_pieces = self.piece_pool[:pieces_to_add]
+            self.piece_pool = self.piece_pool[pieces_to_add:]
+            self.disks[disk_idx].extend(disk_pieces)
+            
+        # 增加回合计数
+        self.round_count += 1
+        
+        # 设置游戏状态
+        self.state = GameState.RUNNING
+        
+    def _execute_action(self, source_type: int, source_idx: int, color: int, 
+                       target_type: int, target_idx: int) -> float:
+        """
+        执行动作并返回即时奖励
+        
+        Args:
+            source_type (int): 源位置类型 (0=圆盘, 1=待定区)
+            source_idx (int): 源位置索引
+            color (int): 选择的颜色
+            target_type (int): 目标位置类型 (0=准备区, 1=扣分区)
+            target_idx (int): 目标位置索引
+            
+        Returns:
+            float: 即时奖励值
+        """
+        # 获取当前玩家的棋盘
+        current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        
+        # 获取要移动的瓷砖
+        pieces_to_move = []
+        other_pieces = []
+        source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
+        
+        # 从源位置收集瓷砖
+        for piece in source_pieces[:]:
+            if piece.is_first:  # 如果是先手标记
+                pieces_to_move.append(piece)
+                source_pieces.remove(piece)
+            elif piece.color == PieceColor(color):  # 如果是选中的颜色
+                pieces_to_move.append(piece)
+                source_pieces.remove(piece)
+            else:  # 其他颜色的瓷砖
+                other_pieces.append(piece)
+                source_pieces.remove(piece)
+                
+        # 如果是从圆盘取瓷砖，将其他颜色的瓷砖移到待定区
+        if source_type == 0 and other_pieces:
+            self.waiting_area.extend(other_pieces)
+            
+        # 处理瓷砖放置
+        if target_type == 0:  # 放入准备区
+            remaining = current_board.add_pieces(target_idx, pieces_to_move)
+            if remaining:  # 如果有剩余瓷砖，放入扣分区
+                current_board.add_to_penalty(remaining)
+        else:  # 直接放入扣分区
+            current_board.add_to_penalty(pieces_to_move)
+            
+        # 计算即时奖励（可以根据具体规则调整）
+        reward = 0.0
+        if target_type == 0:  # 放入准备区给予小额正奖励
+            reward = 0.1
+        else:  # 放入扣分区给予小额负奖励
+            reward = -0.1
+            
+        return reward 

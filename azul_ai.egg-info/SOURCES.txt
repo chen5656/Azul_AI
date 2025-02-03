@@ -1,0 +1,14 @@
+README.md
+setup.py
+azul_ai.egg-info/PKG-INFO
+azul_ai.egg-info/SOURCES.txt
+azul_ai.egg-info/dependency_links.txt
+azul_ai.egg-info/requires.txt
+azul_ai.egg-info/top_level.txt
+src/__init__.py
+src/game/__init__.py
+src/game/board.py
+src/game/environment.py
+src/game/game_state.py
+src/game/piece.py
+tests/test_environment.py

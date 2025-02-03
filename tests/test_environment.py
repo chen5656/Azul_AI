@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from src.game.environment import AzulEnv
+from game.environment import AzulEnv
 
 class TestAzulEnvironment(unittest.TestCase):
     def setUp(self):

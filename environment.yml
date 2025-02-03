@@ -1,17 +1,19 @@
-name: azul_ai
+name: azul-ai
 channels:
-  - defaults
+  - pytorch
   - conda-forge
+  - defaults
 dependencies:
-  - python=3.9
-  - numpy>=1.19.2
-  - tensorflow>=2.4.0
-  - pytorch>=1.9.0
-  - pygame>=2.0.1
-  - matplotlib>=3.3.2
-  - pytest>=6.2.4
+  - python=3.8
+  - pytorch=1.9
+  - numpy=1.21
+  - pygame=2.1
+  - pytest
+  - black
+  - flake8
   - jupyter
+  - matplotlib
+  - tqdm
   - pip
   - pip:
-    - gym>=0.21.0
-    - stable-baselines3>=1.5.0 
+    - gymnasium==0.29.1 
