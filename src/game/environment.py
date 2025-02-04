@@ -6,6 +6,7 @@ import random
 from .game_state import GameState
 from .board import PlayerBoard
 from .piece import Piece, PieceColor
+from .config import GameConfig
 
 class AzulEnv(gym.Env):
     """Azul游戏环境, 遵循OpenAI Gym风格的接口"""
@@ -23,15 +24,32 @@ class AzulEnv(gym.Env):
     PIECES_PER_COLOR = 20  # 每种颜色的瓷砖数量
     PIECES_PER_DISK = 4    # 每个圆盘的瓷砖数量
     
-    def __init__(self):
+    def __init__(self, config: GameConfig = None):
         """构造方法：初始化实例"""
-        super().__init__()  # 调用父类初始化
+        super().__init__()
         
-        # 定义动作空间和观察空间
-        self.action_space = spaces.MultiDiscrete([2, 5, 5, 2, 5])  # (source_type, source_idx, color, target_type, target_idx)
+        # 使用配置或默认值
+        self.config = config or GameConfig()
+        
+        # 修改动作空间以使用配置
+        self.action_space = spaces.MultiDiscrete([
+            2,  # source_type: 0=圆盘, 1=待定区
+            self.config.NUM_DISKS,  # source_idx
+            5,  # color
+            2,  # target_type: 0=准备区, 1=扣分区
+            5   # target_idx
+        ])
         
         # 计算观察空间的维度
-        obs_dim = 100 + 5 + 50 + 50 + 14 + 1 + 1  # 221维
+        disk_dim = self.config.NUM_DISKS * 5  # 圆盘状态：NUM_DISKS个圆盘 × 5种颜色
+        waiting_dim = 5  # 待定区状态：5种颜色的数量
+        prep_dim = self.config.NUM_PLAYERS * self.config.BOARD_SIZE * self.config.BOARD_SIZE  # 准备区状态
+        score_dim = self.config.NUM_PLAYERS * self.config.BOARD_SIZE * self.config.BOARD_SIZE  # 结算区状态
+        penalty_dim = self.config.NUM_PLAYERS * self.config.PENALTY_SLOTS  # 扣分区状态
+        player_dim = 1  # 当前玩家
+        first_marker_dim = 1  # 先手标记位置
+        
+        obs_dim = disk_dim + waiting_dim + prep_dim + score_dim + penalty_dim + player_dim + first_marker_dim
         self.observation_space = spaces.Box(low=0, high=5, shape=(obs_dim,), dtype=np.float32)
         
         # 颜色映射
@@ -49,15 +67,24 @@ class AzulEnv(gym.Env):
         self.round_count = 0
         
         # 初始化棋盘
-        self.player1_board = PlayerBoard(50, 50, "Player 1")
-        self.player2_board = PlayerBoard(50, 400, "Player 2")
+        self.player1_board = PlayerBoard("Player 1")
+        self.player2_board = PlayerBoard("Player 2")
         
         # 初始化游戏组件
-        self.piece_pool = self._initialize_piece_pool()
+        self.piece_pool = []
         self.waste_pool = []
         self.waiting_area = []
-        self.disks = [[] for _ in range(5)]
-        self.first_piece = None
+        self.disks = [[] for _ in range(self.config.NUM_DISKS)]
+        
+        # 创建并放置先手标记到待定区
+        self.first_piece = Piece.create_first_player_marker()
+        self.waiting_area.append(self.first_piece)
+        
+        # 初始化其他组件
+        self._initialize_game()
+        
+        # 初始化渲染器
+        self.renderer = None
         
     def reset(self) -> np.ndarray:
         """实例方法：重置环境"""
@@ -104,94 +131,85 @@ class AzulEnv(gym.Env):
         
     def _get_observation(self) -> np.ndarray:
         """
-        获取游戏状态的向量表示
+        获取当前状态的观察向量
         
         Returns:
-            observation: 包含以下信息的numpy数组：
-            - 圆盘状态 (5, 4, 5) - 5个圆盘，每个4个位置，5种颜色的one-hot编码
-            - 待定区状态 (5,) - 每种颜色的数量
-            - 玩家准备区状态 (2, 5, 5) - 2个玩家，5行，每行最多5个位置
-            - 玩家结算区状态 (2, 5, 5) - 2个玩家，5x5的结算区
-            - 玩家扣分区状态 (2, 7) - 2个玩家，每人7个扣分位置
-            - 当前玩家 (1,) - 1或2
-            - 先手标记 (1,) - 是否持有先手标记
+            np.ndarray: 状态向量
+            - 圆盘状态: NUM_DISKS个圆盘 × 5种颜色
+            - 待定区状态: 5种颜色的数量
+            - 准备区状态: NUM_PLAYERS × BOARD_SIZE × BOARD_SIZE
+            - 结算区状态: NUM_PLAYERS × BOARD_SIZE × BOARD_SIZE
+            - 扣分区状态: NUM_PLAYERS × PENALTY_SLOTS
+            - 当前玩家: 1维
+            - 先手标记位置: 1维
         """
-        # 1. 圆盘状态编码
-        disks_state = np.zeros((5, 4, 5))  # 5个圆盘，每个4个位置，5种颜色
-        for disk_idx, disk in enumerate(self.disks):
-            for piece_idx, piece in enumerate(disk):
-                if piece:
-                    color_idx = self._get_color_index(piece.color)
-                    disks_state[disk_idx, piece_idx, color_idx] = 1
-                    
-        # 2. 待定区状态编码
-        waiting_state = np.zeros(5)  # 5种颜色
+        # 计算各部分的维度
+        disk_dim = self.config.NUM_DISKS * 5
+        waiting_dim = 5
+        prep_dim = self.config.NUM_PLAYERS * self.config.BOARD_SIZE * self.config.BOARD_SIZE
+        score_dim = self.config.NUM_PLAYERS * self.config.BOARD_SIZE * self.config.BOARD_SIZE
+        penalty_dim = self.config.NUM_PLAYERS * self.config.PENALTY_SLOTS
+        
+        # 初始化状态向量
+        obs = np.zeros(self.observation_space.shape[0], dtype=np.float32)
+        
+        # 1. 圆盘状态
+        disk_idx = 0
+        for disk in self.disks:
+            for piece in disk:
+                if piece and not piece.is_first:
+                    color_idx = piece.color.id
+                    obs[disk_idx * 5 + color_idx] += 1
+            disk_idx += 1
+        
+        # 2. 待定区状态
+        offset = disk_dim
         for piece in self.waiting_area:
-            if not piece.is_first:  # 不统计先手标记
-                color_idx = self._get_color_index(piece.color)
-                waiting_state[color_idx] += 1
-                
-        # 3. 玩家准备区状态编码
-        prep_state = np.zeros((2, 5, 5))  # 2个玩家，5行，每行最多5个位置
-        # Player 1
-        for row in range(5):
-            for col, piece in enumerate(self.player1_board.prep_area[row]):
-                if piece:
-                    color_idx = self._get_color_index(piece.color)
-                    prep_state[0, row, col] = color_idx + 1  # 使用1-5表示颜色，0表示空
-        # Player 2
-        for row in range(5):
-            for col, piece in enumerate(self.player2_board.prep_area[row]):
-                if piece:
-                    color_idx = self._get_color_index(piece.color)
-                    prep_state[1, row, col] = color_idx + 1
-                    
-        # 4. 玩家结算区状态编码
-        wall_state = np.zeros((2, 5, 5))  # 2个玩家，5x5的结算区
-        # Player 1
-        for row in range(5):
-            for col in range(5):
-                piece = self.player1_board.scoring_area[row][col]
-                if piece:
-                    color_idx = self._get_color_index(piece.color)
-                    wall_state[0, row, col] = color_idx + 1
-        # Player 2
-        for row in range(5):
-            for col in range(5):
-                piece = self.player2_board.scoring_area[row][col]
-                if piece:
-                    color_idx = self._get_color_index(piece.color)
-                    wall_state[1, row, col] = color_idx + 1
-                    
-        # 5. 玩家扣分区状态编码
-        penalty_state = np.zeros((2, 7))  # 2个玩家，每人7个扣分位置
-        # Player 1
-        for i, piece in enumerate(self.player1_board.penalty_area):
-            if piece:
-                penalty_state[0, i] = 1 if piece.is_first else 2  # 1表示先手标记，2表示普通棋子
-        # Player 2
-        for i, piece in enumerate(self.player2_board.penalty_area):
-            if piece:
-                penalty_state[1, i] = 1 if piece.is_first else 2
-                
-        # 6. 当前玩家编码
-        current_player = np.array([self.current_player])
+            if not piece.is_first:
+                color_idx = piece.color.id
+                obs[offset + color_idx] += 1
         
-        # 7. 先手标记状态
-        first_player_marker = np.array([1 if self.first_piece in self.waiting_area else 0])
+        # 3. 准备区状态
+        offset = disk_dim + waiting_dim
+        for player_idx, board in enumerate([self.player1_board, self.player2_board]):
+            for row in range(self.config.BOARD_SIZE):
+                for col, piece in enumerate(board.prep_area[row]):
+                    if piece and not piece.is_first:
+                        color_idx = piece.color.id
+                        obs[offset + player_idx * (self.config.BOARD_SIZE * self.config.BOARD_SIZE) + row * self.config.BOARD_SIZE + col] = color_idx + 1
         
-        # 将所有状态拼接成一个大的状态向量
-        observation = np.concatenate([
-            disks_state.flatten(),          # 100 = 5 * 4 * 5
-            waiting_state.flatten(),        # 5
-            prep_state.flatten(),           # 50 = 2 * 5 * 5
-            wall_state.flatten(),           # 50 = 2 * 5 * 5
-            penalty_state.flatten(),        # 14 = 2 * 7
-            current_player.flatten(),       # 1
-            first_player_marker.flatten()   # 1
-        ])
+        # 4. 结算区状态
+        offset = disk_dim + waiting_dim + prep_dim
+        for player_idx, board in enumerate([self.player1_board, self.player2_board]):
+            for row in range(self.config.BOARD_SIZE):
+                for col in range(self.config.BOARD_SIZE):
+                    piece = board.scoring_area[row][col]
+                    if piece and not piece.is_first:
+                        color_idx = piece.color.id
+                        obs[offset + player_idx * (self.config.BOARD_SIZE * self.config.BOARD_SIZE) + row * self.config.BOARD_SIZE + col] = color_idx + 1
         
-        return observation
+        # 5. 扣分区状态
+        offset = disk_dim + waiting_dim + prep_dim + score_dim
+        for player_idx, board in enumerate([self.player1_board, self.player2_board]):
+            for slot_idx, piece in enumerate(board.penalty_area):
+                if piece and not piece.is_first:
+                    color_idx = piece.color.id
+                    obs[offset + player_idx * self.config.PENALTY_SLOTS + slot_idx] = color_idx + 1
+        
+        # 6. 当前玩家
+        offset = disk_dim + waiting_dim + prep_dim + score_dim + penalty_dim
+        obs[offset] = self.current_player
+        
+        # 7. 先手标记位置
+        offset = disk_dim + waiting_dim + prep_dim + score_dim + penalty_dim + 1
+        if any(p.is_first for p in self.waiting_area):
+            obs[offset] = 1
+        elif any(p.is_first for p in self.player1_board.penalty_area):
+            obs[offset] = 2
+        elif any(p.is_first for p in self.player2_board.penalty_area):
+            obs[offset] = 3
+        
+        return obs
 
     def _get_color_index(self, color: Tuple[int, int, int]) -> int:
         """将RGB颜色转换为索引"""
@@ -278,46 +296,53 @@ class AzulEnv(gym.Env):
         Returns:
             float: 即时奖励值
         """
-        # 获取当前玩家的棋盘
         current_board = self.player1_board if self.current_player == 1 else self.player2_board
         
-        # 获取要移动的瓷砖
+        # 获取要移动的棋子
         pieces_to_move = []
         other_pieces = []
         source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
         
-        # 从源位置收集瓷砖
+        # 从源位置收集棋子
         for piece in source_pieces[:]:
-            if piece.is_first:  # 如果是先手标记
+            if piece.color == PieceColor(color) or piece.is_first:
                 pieces_to_move.append(piece)
                 source_pieces.remove(piece)
-            elif piece.color == PieceColor(color):  # 如果是选中的颜色
-                pieces_to_move.append(piece)
-                source_pieces.remove(piece)
-            else:  # 其他颜色的瓷砖
+            else:
                 other_pieces.append(piece)
                 source_pieces.remove(piece)
                 
-        # 如果是从圆盘取瓷砖，将其他颜色的瓷砖移到待定区
+        # 如果是从圆盘取棋子，将其他颜色的棋子移到待定区
         if source_type == 0 and other_pieces:
             self.waiting_area.extend(other_pieces)
             
-        # 处理瓷砖放置
+        # 处理棋子放置
         if target_type == 0:  # 放入准备区
-            remaining = current_board.add_pieces(target_idx, pieces_to_move)
-            if remaining:  # 如果有剩余瓷砖，放入扣分区
+            # 确保从右到左填充
+            row = current_board.prep_area[target_idx]
+            start_idx = len(row) - 1
+            
+            # 检查是否可以放置
+            if not current_board.can_place_pieces(target_idx, pieces_to_move):
+                return -1.0  # 非法动作惩罚
+                
+            # 分离先手标记和普通棋子
+            normal_pieces = [p for p in pieces_to_move if not p.is_first]
+            first_piece = next((p for p in pieces_to_move if p.is_first), None)
+            
+            # 放置普通棋子
+            remaining = current_board.add_pieces_from_right(target_idx, normal_pieces)
+            if remaining:
                 current_board.add_to_penalty(remaining)
+                
+            # 处理先手标记
+            if first_piece:
+                current_board.add_to_penalty([first_piece])
+                
         else:  # 直接放入扣分区
             current_board.add_to_penalty(pieces_to_move)
             
-        # 计算即时奖励（可以根据具体规则调整）
-        reward = 0.0
-        if target_type == 0:  # 放入准备区给予小额正奖励
-            reward = 0.1
-        else:  # 放入扣分区给予小额负奖励
-            reward = -0.1
-            
-        return reward
+        return 0.1 if target_type == 0 else -0.1
         
     def _calculate_reward(self, action_result: Dict) -> float:
         """计算奖励值"""
@@ -325,9 +350,28 @@ class AzulEnv(gym.Env):
         pass 
 
     def render(self, mode='human'):
-        """渲染当前游戏状态"""
-        # TODO: 实现渲染逻辑
-        pass
+        """
+        渲染当前游戏状态
+        
+        Args:
+            mode (str): 渲染模式
+                - 'human': 在屏幕上显示
+                - 'rgb_array': 返回RGB数组
+        
+        Returns:
+            numpy.ndarray: 如果mode是'rgb_array'，返回RGB数组
+        """
+        if self.renderer is None:
+            from .renderer import AzulRenderer
+            self.renderer = AzulRenderer()
+            
+        return self.renderer.render(self)
+        
+    def close(self):
+        """关闭环境"""
+        if self.renderer:
+            self.renderer.close()
+            self.renderer = None
         
     def _initialize_piece_pool(self) -> List[Piece]:
         """
@@ -339,14 +383,11 @@ class AzulEnv(gym.Env):
         piece_pool = []
         
         # 为每种颜色创建指定数量的瓷砖
-        for color in PieceColor:
+        for color in list(PieceColor):  # 转换为列表
             if color != PieceColor.NONE:  # 跳过NONE颜色
                 for _ in range(self.PIECES_PER_COLOR):
                     piece_pool.append(Piece(color=color))
                     
-        # 创建先手标记
-        self.first_piece = Piece.create_first_player_marker()
-        
         # 随机打乱瓷砖顺序
         random.shuffle(piece_pool)
         
@@ -358,14 +399,65 @@ class AzulEnv(gym.Env):
         pass
         
     def _perform_scoring(self) -> float:
-        """执行结算并返回得分"""
-        # TODO: 实现结算逻辑
-        pass
+        """
+        执行结算并返回得分
+        
+        Returns:
+            float: 结算得到的分数
+        """
+        total_score = 0.0
+        
+        # 处理玩家1的棋盘
+        pieces = self.player1_board.clear_penalty_area()
+        self.waste_pool.extend(pieces)
+        
+        # 处理玩家2的棋盘
+        pieces = self.player2_board.clear_penalty_area()
+        self.waste_pool.extend(pieces)
+        
+        return total_score
         
     def _check_game_end(self) -> bool:
-        """检查游戏是否结束"""
-        # TODO: 实现游戏结束检查
-        pass
+        """
+        检查游戏是否结束
+        
+        游戏结束条件：
+        1. 任意玩家在结算区完成一整行
+        2. 回合结束且无法开始新回合（可选）
+        
+        Returns:
+            bool: 如果游戏结束返回True，否则返回False
+        """
+        # 检查玩家1的结算区
+        for row in range(5):
+            row_complete = True
+            for col in range(5):
+                if not self.player1_board.scoring_area[row][col]:
+                    row_complete = False
+                    break
+            if row_complete:
+                self.state = GameState.GAME_END
+                return True
+            
+        # 检查玩家2的结算区
+        for row in range(5):
+            row_complete = True
+            for col in range(5):
+                if not self.player2_board.scoring_area[row][col]:
+                    row_complete = False
+                    break
+            if row_complete:
+                self.state = GameState.GAME_END
+                return True
+            
+        # 检查是否还能开始新回合
+        if (not self.piece_pool and  # 瓷砖池为空
+            not any(self.disks) and  # 所有圆盘为空
+            not self.waiting_area):  # 待定区为空
+            self.state = GameState.GAME_END
+            return True
+        
+        return False
         
     def _calculate_final_reward(self) -> float:
         """计算游戏结束时的最终奖励"""
@@ -382,42 +474,43 @@ class AzulEnv(gym.Env):
         }
         
     def start_new_round(self):
-        """
-        开始新的回合
-        
-        1. 重置圆盘和待定区
-        2. 将瓷砖分配到圆盘
-        3. 处理剩余瓷砖
-        4. 设置回合状态
-        """
-        # 重置游戏区域
-        self.disks = [[] for _ in range(5)]  # 5个圆盘
-        self.waiting_area = []
-        
-        # 如果是第一回合或瓷砖池为空，重新初始化瓷砖池
+        """开始新回合"""
+        # 检查棋子池是否需要补充
         if not self.piece_pool:
-            self.piece_pool = self._initialize_piece_pool()
+            self.piece_pool.extend(self.waste_pool)
+            self.waste_pool.clear()
+            random.shuffle(self.piece_pool)
             
-        # 将先手标记放入待定区（如果不在玩家手中）
-        if self.first_piece.position is None:
-            self.waiting_area.append(self.first_piece)
-            
-        # 将瓷砖分配到圆盘
-        for disk_idx in range(5):
-            pieces_to_add = min(self.PIECES_PER_DISK, len(self.piece_pool))
-            if pieces_to_add == 0:
+        # 分配棋子到圆盘
+        for disk_idx in range(self.config.NUM_DISKS):
+            pieces_available = len(self.piece_pool)
+            if pieces_available == 0:
                 break
                 
-            # 取出瓷砖并添加到圆盘
+            # 计算这个圆盘可以放多少棋子
+            pieces_to_add = min(self.config.PIECES_PER_DISK, pieces_available)
+            
+            # 取出棋子并添加到圆盘
             disk_pieces = self.piece_pool[:pieces_to_add]
             self.piece_pool = self.piece_pool[pieces_to_add:]
             self.disks[disk_idx].extend(disk_pieces)
             
-        # 增加回合计数
         self.round_count += 1
-        
-        # 设置游戏状态
         self.state = GameState.RUNNING
+        
+    def _initialize_game(self):
+        """初始化游戏状态"""
+        self.state = GameState.INIT
+        self.current_player = 1
+        self.round_count = 0
+        self.piece_pool = self._initialize_piece_pool()
+        
+    def _initialize_game(self):
+        """初始化游戏状态"""
+        self.state = GameState.INIT
+        self.current_player = 1
+        self.round_count = 0
+        self.piece_pool = self._initialize_piece_pool()
         
     def _execute_action(self, source_type: int, source_idx: int, color: int, 
                        target_type: int, target_idx: int) -> float:
@@ -434,43 +527,50 @@ class AzulEnv(gym.Env):
         Returns:
             float: 即时奖励值
         """
-        # 获取当前玩家的棋盘
         current_board = self.player1_board if self.current_player == 1 else self.player2_board
         
-        # 获取要移动的瓷砖
+        # 获取要移动的棋子
         pieces_to_move = []
         other_pieces = []
         source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
         
-        # 从源位置收集瓷砖
+        # 从源位置收集棋子
         for piece in source_pieces[:]:
-            if piece.is_first:  # 如果是先手标记
+            if piece.color == PieceColor(color) or piece.is_first:
                 pieces_to_move.append(piece)
                 source_pieces.remove(piece)
-            elif piece.color == PieceColor(color):  # 如果是选中的颜色
-                pieces_to_move.append(piece)
-                source_pieces.remove(piece)
-            else:  # 其他颜色的瓷砖
+            else:
                 other_pieces.append(piece)
                 source_pieces.remove(piece)
                 
-        # 如果是从圆盘取瓷砖，将其他颜色的瓷砖移到待定区
+        # 如果是从圆盘取棋子，将其他颜色的棋子移到待定区
         if source_type == 0 and other_pieces:
             self.waiting_area.extend(other_pieces)
             
-        # 处理瓷砖放置
+        # 处理棋子放置
         if target_type == 0:  # 放入准备区
-            remaining = current_board.add_pieces(target_idx, pieces_to_move)
-            if remaining:  # 如果有剩余瓷砖，放入扣分区
+            # 确保从右到左填充
+            row = current_board.prep_area[target_idx]
+            start_idx = len(row) - 1
+            
+            # 检查是否可以放置
+            if not current_board.can_place_pieces(target_idx, pieces_to_move):
+                return -1.0  # 非法动作惩罚
+                
+            # 分离先手标记和普通棋子
+            normal_pieces = [p for p in pieces_to_move if not p.is_first]
+            first_piece = next((p for p in pieces_to_move if p.is_first), None)
+            
+            # 放置普通棋子
+            remaining = current_board.add_pieces_from_right(target_idx, normal_pieces)
+            if remaining:
                 current_board.add_to_penalty(remaining)
+                
+            # 处理先手标记
+            if first_piece:
+                current_board.add_to_penalty([first_piece])
+                
         else:  # 直接放入扣分区
             current_board.add_to_penalty(pieces_to_move)
             
-        # 计算即时奖励（可以根据具体规则调整）
-        reward = 0.0
-        if target_type == 0:  # 放入准备区给予小额正奖励
-            reward = 0.1
-        else:  # 放入扣分区给予小额负奖励
-            reward = -0.1
-            
-        return reward 
+        return 0.1 if target_type == 0 else -0.1 

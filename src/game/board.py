@@ -1,22 +1,44 @@
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional
 from .piece import Piece, PieceColor
+from .config import GameConfig
+import warnings
+from functools import wraps
+
+def deprecated_params(*params):
+    """
+    标记函数参数为已弃用的装饰器
+    
+    Args:
+        params: 要标记为已弃用的参数名称
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for param in params:
+                if param in kwargs:
+                    warnings.warn(
+                        f"Parameter '{param}' is deprecated and will be removed in future versions.",
+                        DeprecationWarning,
+                        stacklevel=2
+                    )
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 class PlayerBoard:
     """
     玩家棋盘类
     
     Attributes:
-        x (int): 棋盘在屏幕上的x坐标
-        y (int): 棋盘在屏幕上的y坐标
-        player_name (str): 玩家名称
+        name (str): 玩家名称
         score (int): 玩家得分
-        prep_area (List[List[Optional[Piece]]]): 准备区，5行，每行长度从1到5
-        scoring_area (List[List[Optional[Piece]]]): 得分区，5x5的网格
-        penalty_area (List[Optional[Piece]]): 扣分区，最多容纳7个瓷砖
+        prep_area (List[List[Optional[Piece]]]): 准备区,5行,每行长度从1到5
+        scoring_area (List[List[Optional[Piece]]]): 得分区,5x5的网格
+        penalty_area (List[Optional[Piece]]): 扣分区,最多容纳7个瓷砖
     """
     
-    # 每行对应的颜色模式
-    COLOR_PATTERN = [
+    # 结算区颜色模式（5x5网格）
+    SCORING_PATTERN = [
         [PieceColor.BLUE, PieceColor.YELLOW, PieceColor.RED, PieceColor.BLACK, PieceColor.WHITE],
         [PieceColor.WHITE, PieceColor.BLUE, PieceColor.YELLOW, PieceColor.RED, PieceColor.BLACK],
         [PieceColor.BLACK, PieceColor.WHITE, PieceColor.BLUE, PieceColor.YELLOW, PieceColor.RED],
@@ -27,120 +49,136 @@ class PlayerBoard:
     # 扣分区扣分规则
     PENALTY_POINTS = [-1, -1, -2, -2, -2, -3, -3]
     
-    def __init__(self, x: int, y: int, player_name: str):
+    @deprecated_params('x', 'y')
+    def __init__(self, x: int, y: int, name: str, config: GameConfig = None):
         """
         初始化玩家棋盘
         
         Args:
-            x (int): 棋盘在屏幕上的x坐标
-            y (int): 棋盘在屏幕上的y坐标
-            player_name (str): 玩家名称
+            name (str): 玩家名称
+            config (GameConfig): 游戏配置
+            
+        Deprecated Args:
+            x (int): [已弃用] 棋盘在屏幕上的x坐标, 用于可视化
+            y (int): [已弃用] 棋盘在屏幕上的y坐标, 用于可视化
         """
-        self.x = x
-        self.y = y
-        self.player_name = player_name
+        self.config = config or GameConfig()
+        self.name = name
+        self._position = (x, y)  # 标记为内部使用
+        
+        # 初始化各个区域
+        self.prep_area = [[None] * (i + 1) for i in range(5)]  # 准备区（三角形）:每行i+1个位置
+        self.scoring_area = [[None] * 5 for _ in range(5)]  # 结算区 5 x 5
+        self.penalty_area = []  # 扣分区:可以放超过7个棋子,但只有前7个计算分数
         self.score = 0
         
-        # 初始化准备区 (每行长度不同: 1-5)
-        self.prep_area = [
-            [None] * (i + 1) for i in range(5)
-        ]
-        
-        # 初始化得分区 (5x5)
-        self.scoring_area = [
-            [None] * 5 for _ in range(5)
-        ]
-        
-        # 初始化扣分区
-        self.penalty_area = [None] * 7
-        
-    def can_place_pieces(self, row: int, color: PieceColor) -> bool:
+    def can_place_pieces(self, row: int, pieces: List[Piece]) -> bool:
         """
-        检查是否可以在指定行放置指定颜色的瓷砖
+        检查是否可以在准备区的指定行放置棋子。
+        要求至少有一个空位,多余的棋子会进入扣分区。
         
         Args:
-            row (int): 目标行索引
-            color (PieceColor): 瓷砖颜色
-            
+            row (int): 准备区的行索引 (0-4)
+            pieces (List[Piece]): 要放置的棋子列表
+        
         Returns:
-            bool: 如果可以放置则返回True
+            bool: 如果可以放置返回True
         """
-        # 检查行索引是否有效
-        if not 0 <= row < 5:
-            return False
+        if not pieces:
+            return False            
             
-        # 检查该行是否已满
-        if all(piece is not None for piece in self.prep_area[row]):
-            return False
+        # 获取非先手标记的棋子
+        normal_pieces = [p for p in pieces if not p.is_first]
+        if not normal_pieces:
+            return True  # 只有先手标记时可以放置  -- TODO:是否需要修改？
             
-        # 检查该行是否已有其他颜色的瓷砖
-        existing_pieces = [p for p in self.prep_area[row] if p is not None]
-        if existing_pieces and existing_pieces[0].color != color:
+        # 检查颜色一致性
+        color = normal_pieces[0].color
+        if not all(p.color == color for p in normal_pieces):
             return False
-            
-        # 检查对应的得分区位置是否已被占用
-        target_col = self.COLOR_PATTERN[row].index(color)
-        if self.scoring_area[row][target_col] is not None:
+        
+        # 检查是否整排为空
+        if all(p is None for p in self.prep_area[row]):            
+            # 检查结算区该行是否已有相同颜色
+            if any(p is not None and p.color == color for p in self.scoring_area[row]):
+                return False
+            else:
+                return True
+        
+        # 检查最后一格是否为空
+        if self.prep_area[row][-1] is not None:
+            return False
+                    
+        # 检查第一格颜色是否一致
+        if self.prep_area[row][0].color != color:
             return False
             
         return True
         
-    def add_pieces(self, row: int, pieces: List[Piece]) -> List[Piece]:
+    def add_pieces_to_prep_area(self, row: int, pieces: List[Piece]) -> List[Piece]:
         """
-        在准备区指定行添加瓷砖
+        填充准备区,返回多余的棋子。
+        从最左边的空位开始连续填充棋子。
         
         Args:
-            row (int): 目标行索引
-            pieces (List[Piece]): 要添加的瓷砖列表
+            row (int): 准备区的行索引 (0-4)
+            pieces (List[Piece]): 要放置的棋子列表
             
         Returns:
-            List[Piece]: 无法放置的瓷砖列表
+            List[Piece]: 无法放置的多余棋子
         """
-        if not self.can_place_pieces(row, pieces[0].color):
+        # 找到最左边的空位
+        row_size = len(self.prep_area[row])
+        first_empty = 0
+        while first_empty < row_size and self.prep_area[row][first_empty] is not None:
+            first_empty += 1
+            
+        # 如果没有空位,返回所有棋子
+        if first_empty == row_size:
             return pieces
             
-        # 计算可以放置的数量
-        empty_spots = sum(1 for p in self.prep_area[row] if p is None)
-        can_place = min(empty_spots, len(pieces))
-        
-        # 放置瓷砖
-        placed = 0
-        for i, spot in enumerate(self.prep_area[row]):
-            if spot is None and placed < can_place:
-                self.prep_area[row][i] = pieces[placed]
-                pieces[placed].move_to(row, i)
-                placed += 1
+        # 计算从first_empty到行尾的空位数量
+        empty_count = row_size - first_empty
                 
-        # 返回剩余无法放置的瓷砖
-        return pieces[placed:]
+        # 计算可以放置的棋子数量
+        pieces_to_place = pieces[:empty_count]
+        remaining_pieces = pieces[empty_count:]
         
-    def add_to_penalty(self, pieces: List[Piece]) -> List[Piece]:
+        # 从最左边的空位开始连续填充
+        for i, piece in enumerate(pieces_to_place):
+            self.prep_area[row][first_empty + i] = piece
+            
+        return remaining_pieces
+        
+    def add_to_penalty(self, pieces: List[Piece]) -> None:
         """
-        将瓷砖添加到扣分区
+        将棋子添加到扣分区。可以放超过7个棋子,但只有前7个计算扣分。
+        扣分将在最终计算时进行,而不是在添加时。
         
         Args:
-            pieces (List[Piece]): 要添加的瓷砖列表
-            
-        Returns:
-            List[Piece]: 无法放置的瓷砖列表
+            pieces (List[Piece]): 要添加的棋子列表
         """
-        # 找到第一个空位
-        for i, spot in enumerate(self.penalty_area):
-            if spot is None and pieces:
-                self.penalty_area[i] = pieces[0]
-                pieces[0].move_to(-1, i)  # 使用-1表示扣分区
-                pieces = pieces[1:]
-                
+        for piece in pieces:
+            self.penalty_area.append(piece)
+            
+    def clear_penalty_area(self) -> List[Piece]:
+        """
+        清空扣分区并返回所有棋子
+        
+        Returns:
+            List[Piece]: 扣分区中的所有棋子
+        """
+        pieces = self.penalty_area[:]
+        self.penalty_area = []
         return pieces
         
-    def score_row(self, row: int) -> int:
+    def score_row_round_end(self, row: int) -> int:
         """
-        计算指定行的得分
+        计算指定行的回合结束得分，只计算新放置棋子的得分
         
-        规则：
-        1. 单个瓷砖：1分
-        2. 相邻连接：每个相邻+1分
-        3. 完整行：额外2分
+        规则:
+        1. 单个瓷砖:1分
+        2. 相邻连接:每个相邻+1分
         
         Args:
             row (int): 行索引
@@ -153,16 +191,14 @@ class PlayerBoard:
             
         # 获取行中的瓷砖
         row_pieces = self.scoring_area[row]
-        if not any(row_pieces):  # 空行
+        if not any(p is not None and p.is_new for p in row_pieces):  # 没有新棋子
             return 0
             
         score = 0
-        consecutive_count = 0  # 连续瓷砖计数
         
-        # 计算基础分和连续分
+        # 只对新棋子计算分数
         for col, piece in enumerate(row_pieces):
-            if piece is not None:
-                consecutive_count += 1
+            if piece is not None and piece.is_new:
                 # 基础分
                 score += 1
                 # 与左侧相连
@@ -175,20 +211,36 @@ class PlayerBoard:
                 if row < 4 and self.scoring_area[row+1][col] is not None:
                     score += 1
                     
-        # 完整行奖励
-        if consecutive_count == 5:
-            score += 2
-            
         return score
         
-    def score_column(self, col: int) -> int:
+    def score_row_game_end(self, row: int) -> int:
         """
-        计算指定列的得分
+        计算指定行的游戏结束额外得分
         
-        规则：
-        1. 单个瓷砖：1分
-        2. 相邻连接：每个相邻+1分
-        3. 完整列：额外7分
+        规则:
+        1. 完整行:额外2分
+        
+        Args:
+            row (int): 行索引
+            
+        Returns:
+            int: 得分
+        """
+        if not 0 <= row < 5:
+            return 0
+            
+        # 检查是否是完整行
+        if all(piece is not None for piece in self.scoring_area[row]):
+            return 2
+        return 0
+        
+    def score_column_round_end(self, col: int) -> int:
+        """
+        计算指定列的回合结束得分，只计算新放置棋子的得分
+        
+        规则:
+        1. 单个瓷砖:1分
+        2. 相邻连接:每个相邻+1分
         
         Args:
             col (int): 列索引
@@ -201,16 +253,14 @@ class PlayerBoard:
             
         # 获取列中的瓷砖
         col_pieces = [self.scoring_area[row][col] for row in range(5)]
-        if not any(col_pieces):  # 空列
+        if not any(p is not None and p.is_new for p in col_pieces):  # 没有新棋子
             return 0
             
         score = 0
-        consecutive_count = 0  # 连续瓷砖计数
         
-        # 计算基础分和连续分
+        # 只对新棋子计算分数
         for row, piece in enumerate(col_pieces):
-            if piece is not None:
-                consecutive_count += 1
+            if piece is not None and piece.is_new:
                 # 基础分
                 score += 1
                 # 与上方相连
@@ -223,17 +273,107 @@ class PlayerBoard:
                 if col < 4 and self.scoring_area[row][col+1] is not None:
                     score += 1
                     
-        # 完整列奖励
-        if consecutive_count == 5:
-            score += 7
-            
         return score
+        
+    def score_column_game_end(self, col: int) -> int:
+        """
+        计算指定列的游戏结束额外得分
+        
+        规则:
+        1. 完整列:额外7分
+        
+        Args:
+            col (int): 列索引
+            
+        Returns:
+            int: 得分
+        """
+        if not 0 <= col < 5:
+            return 0
+            
+        # 检查是否是完整列
+        if all(self.scoring_area[row][col] is not None for row in range(5)):
+            return 7
+        return 0
+        
+    def calculate_round_end_score(self) -> int:
+        """
+        计算回合结束时的得分,并更新玩家总分(self.score)
+        
+        Returns:
+            int: 本回合得分（不包括之前累积的分数）
+        """
+        score = 0
+        
+        # 计算行得分
+        for row in range(5):
+            score += self.score_row_round_end(row)
+            
+        # 计算列得分
+        for col in range(5):
+            score += self.score_column_round_end(col)
+            
+        # 计算扣分
+        score += self.calculate_penalty()
+        
+        # 更新玩家总分
+        self.score += score
+        
+        # 重置所有棋子的is_new状态
+        self._reset_new_pieces()
+        
+        return score
+        
+    def _reset_new_pieces(self):
+        """
+        重置所有棋子的is_new状态为False
+        在每回合结算分数后调用
+        """
+        for row in range(5):
+            for col in range(5):
+                piece = self.scoring_area[row][col]
+                if piece is not None:
+                    piece.is_new = False
+        
+    def calculate_game_end_score(self) -> int:
+        """
+        计算游戏结束时的额外得分
+        
+        Returns:
+            int: 游戏结束额外得分
+        """
+        score = 0
+        
+        # 计算完整行奖励
+        for row in range(5):
+            score += self.score_row_game_end(row)
+            
+        # 计算完整列奖励
+        for col in range(5):
+            score += self.score_column_game_end(col)
+            
+        # 计算颜色完成奖励
+        for color in PieceColor:
+            if color != PieceColor.NONE:
+                score += self.calculate_color_bonus(color)
+                
+        return score
+        
+    def calculate_total_score(self) -> int:
+        """
+        计算总得分
+        
+        Returns:
+            int: 总得分
+        """
+        self.score += self.calculate_round_end_score()
+        return self.score
         
     def calculate_color_bonus(self, color: PieceColor) -> int:
         """
         计算指定颜色的完成奖励
         
-        规则：完成一个颜色的所有瓷砖可以获得10分奖励
+        规则:完成一个颜色的所有瓷砖可以获得10分奖励
         
         Args:
             color (PieceColor): 瓷砖颜色
@@ -243,47 +383,20 @@ class PlayerBoard:
         """
         # 检查每行中指定颜色的位置是否都已放置瓷砖
         for row in range(5):
-            col = self.COLOR_PATTERN[row].index(color)
+            col = self.SCORING_PATTERN[row].index(color)
             if self.scoring_area[row][col] is None:
                 return 0
         return 10
         
-    def calculate_total_score(self) -> int:
-        """
-        计算总得分
-        
-        Returns:
-            int: 总得分
-        """
-        score = 0
-        
-        # 计算行得分
-        for row in range(5):
-            score += self.score_row(row)
-            
-        # 计算列得分
-        for col in range(5):
-            score += self.score_column(col)
-            
-        # 计算颜色完成奖励
-        for color in PieceColor:
-            if color != PieceColor.NONE:
-                score += self.calculate_color_bonus(color)
-                
-        # 计算扣分
-        score += self.calculate_penalty()
-        
-        return score
-        
     def calculate_penalty(self) -> int:
         """
-        计算扣分区的扣分
+        计算扣分区的扣分。只计算前7个棋子的扣分。
         
         Returns:
             int: 扣分值（负数）
         """
         penalty = 0
-        for i, piece in enumerate(self.penalty_area):
-            if piece is not None:
-                penalty += self.PENALTY_POINTS[i]
+        # 只计算前7个棋子的扣分
+        for i in range(min(len(self.penalty_area), self.config.PENALTY_SLOTS)):
+            penalty += self.config.PENALTY_VALUES[i]
         return penalty 

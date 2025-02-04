@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from game.environment import AzulEnv
+from src.game.environment import AzulEnv
 
 class TestAzulEnvironment(unittest.TestCase):
     def setUp(self):
@@ -13,43 +13,43 @@ class TestAzulEnvironment(unittest.TestCase):
         observation = self.env.reset()
         
         # 1. 检查向量维度
-        self.assertEqual(len(observation), 221,  # 100 + 5 + 50 + 50 + 14 + 1 + 1
-                        "状态向量维度应该是221")
+        self.assertEqual(len(observation), 146,  # 25 + 5 + 50 + 50 + 14 + 1 + 1
+                        "状态向量维度应该是146")
         
-        # 2. 检查圆盘状态 (前100个元素)
-        disks_state = observation[:100].reshape(5, 4, 5)
+        # 2. 检查圆盘状态 (前25个元素)
+        disks_state = observation[:25].reshape(5, 5)  # 5个圆盘 × 5种颜色
         # 每个圆盘应该有4个棋子
         for disk in disks_state:
             self.assertEqual(np.sum(disk), 4,
                            "每个圆盘应该有4个棋子")
             
         # 3. 检查待定区状态 (接下来5个元素)
-        waiting_state = observation[100:105]
+        waiting_state = observation[25:30]
         self.assertEqual(np.sum(waiting_state), 0,
                         "初始状态待定区应该是空的")
         
         # 4. 检查玩家准备区状态
-        prep_state = observation[105:155].reshape(2, 5, 5)
+        prep_state = observation[30:80].reshape(2, 5, 5)
         self.assertEqual(np.sum(prep_state), 0,
                         "初始状态准备区应该是空的")
         
         # 5. 检查玩家结算区状态
-        wall_state = observation[155:205].reshape(2, 5, 5)
+        wall_state = observation[80:130].reshape(2, 5, 5)
         self.assertEqual(np.sum(wall_state), 0,
                         "初始状态结算区应该是空的")
         
         # 6. 检查扣分区状态
-        penalty_state = observation[205:219].reshape(2, 7)
+        penalty_state = observation[130:144].reshape(2, 7)
         self.assertEqual(np.sum(penalty_state), 0,
                         "初始状态扣分区应该是空的")
         
         # 7. 检查当前玩家
-        current_player = observation[219]
+        current_player = observation[144]
         self.assertEqual(current_player, 1,
                         "游戏应该从玩家1开始")
         
         # 8. 检查先手标记
-        first_player_marker = observation[220]
+        first_player_marker = observation[145]
         self.assertEqual(first_player_marker, 1,
                         "初始状态先手标记应该在待定区")
         
@@ -110,8 +110,8 @@ class TestAzulEnvironment(unittest.TestCase):
                                 "info应该是字典")
             
             # 检查状态向量的维度
-            self.assertEqual(len(next_state), 221,
-                           "状态向量维度应该是221")
+            self.assertEqual(len(next_state), 146,
+                           "状态向量维度应该是146")
             
     def test_invalid_action(self):
         """测试无效动作的处理"""
