@@ -1,7 +1,6 @@
 import unittest
 from src.game.board import PlayerBoard
 from src.game.piece import Piece, PieceColor
-from src.game.config import GameConfig
 
 class TestScoring(unittest.TestCase):
     def setUp(self):
@@ -22,7 +21,6 @@ class TestScoring(unittest.TestCase):
         """
         for row in range(5):
             for col in range(5):
-                print(row, col)
                 if row < len(matrix) and col < len(matrix[row]):
                     if matrix[row][col] == -1:
                         self.board.scoring_area[row][col] = None
@@ -58,7 +56,7 @@ class TestScoring(unittest.TestCase):
                     print(f"[{color_map[piece.color]}{marker}]", end="")
             print("]")
 
-    def test_new_pieces_scoring(self):
+    def test_new_pieces_scoring_round_end_1(self):
         """
         测试只对新放置棋子计算分数
         """
@@ -72,16 +70,77 @@ class TestScoring(unittest.TestCase):
         ]
         
         self.set_board_state(pattern)
-        self.print_board_state()
-        
-        # 计算期望分数
-        # 基础分：2个新棋子 = 2分
-        # 连接分：2个连接（R与Y相连，W与B相连）= 2分
         expected_score = 6
         
         actual_score = self.board.calculate_round_end_score()
         print(f"期望得分: {expected_score}")
         print(f"实际得分: {actual_score}")
+        self.assertEqual(actual_score, expected_score)
+
+    def test_new_pieces_scoring_round_end_2(self):
+        """
+        测试只对新放置棋子计算分数
+        """
+        pattern = [
+            [0, 0, 1, 0, -1],  
+            [1, -1, 0, 0, -1],  
+            [0, -1, -1, -1, -1],  
+            [-1, -1, 0, -1, -1],
+            [-1, -1, -1, 1, -1]
+        ]
+        
+        self.set_board_state(pattern)
+
+        expected_score = 6 + 3 + 1
+        actual_score = self.board.calculate_round_end_score()
+
+        print(f"期望得分: {expected_score}")
+        print(f"实际得分: {actual_score}")
+        
+        self.assertEqual(actual_score, expected_score)
+        
+    def test_scoring_round_end_penalty_1(self):
+        """
+        测试只对新放置棋子计算分数
+        """
+        pattern = [
+            [0, 0, 1, -1, -1],  # B Y R* - -  (*表示新棋子)
+            [1, -1, -1, -1, -1],  # W* - - - -
+            [0, -1, -1, -1, -1],  # K - - - -
+            [-1, -1, -1, -1, -1],
+            [-1, -1, -1, -1, -1]
+        ]
+
+        self.board.penalty_area = [Piece(PieceColor.BLUE), Piece(PieceColor.YELLOW), Piece(PieceColor.RED)]
+
+        self.set_board_state(pattern)
+
+        expected_score = 6 - 4
+        actual_score = self.board.calculate_round_end_score()
+
+        print(f"期望得分: {expected_score}")
+        print(f"实际得分: {actual_score}")
+
+    def test_new_pieces_scoring_game_end_1(self):
+        """
+        不用考虑是否为新棋子
+        """
+        pattern = [
+            [0, 0, 0, 0, 0],  
+            [0, 0, 0, 0, -1],  
+            [0, -1, 0, 0, -1],  
+            [-1, -1, 0, 0, -1],
+            [-1, -1, 0, 0, 0]
+        ]
+        
+        self.set_board_state(pattern)
+
+        expected_score = 2 + 7 + 7 + 10
+        actual_score = self.board.calculate_game_end_score()
+
+        print(f"期望得分: {expected_score}")
+        print(f"实际得分: {actual_score}")
+        
         self.assertEqual(actual_score, expected_score)
         
 if __name__ == '__main__':

@@ -1,5 +1,7 @@
 # Azul AI 项目 TODO 列表
 
+[ ] board.py 中 记分还是错的.
+
 ## 环境类实现 (src/game/environment.py)
 
 ### 核心功能实现

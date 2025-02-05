@@ -54,7 +54,7 @@ class Piece:
         """
         self.position = (row, col)
     
-    def remove_from_board(self):
+    def remove_from_board(self):  # TODO: 需要再看看
         """从棋盘上移除瓷砖"""
         self.position = None
     

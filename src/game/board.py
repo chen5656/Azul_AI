@@ -172,46 +172,73 @@ class PlayerBoard:
         self.penalty_area = []
         return pieces
         
-    def score_row_round_end(self, row: int) -> int:
+    def score_row_round_end(self, row: int, col: int) -> int:
         """
-        计算指定行的回合结束得分，只计算新放置棋子的得分
+        计算指定位置的水平方向得分，只计算新放置棋子的得分
         
         规则:
-        1. 单个瓷砖:1分
-        2. 相邻连接:每个相邻+1分
+        - 检查是否能和水平方向形成连线（长度≥2）
+        - 如果能形成连线，得分等于线的长度
         
         Args:
             row (int): 行索引
+            col (int): 列索引
             
         Returns:
             int: 得分
         """
-        if not 0 <= row < 5:
+        piece = self.scoring_area[row][col]
+        if piece is None or not piece.is_new:
             return 0
             
-        # 获取行中的瓷砖
-        row_pieces = self.scoring_area[row]
-        if not any(p is not None and p.is_new for p in row_pieces):  # 没有新棋子
-            return 0
+        # 计算水平连线长度
+        horizontal_line = 1
+        # 向左检查
+        left = col - 1
+        while left >= 0 and self.scoring_area[row][left] is not None:
+            horizontal_line += 1
+            left -= 1
+        # 向右检查
+        right = col + 1
+        while right < 5 and self.scoring_area[row][right] is not None:
+            horizontal_line += 1
+            right += 1
             
-        score = 0
+        return horizontal_line if horizontal_line >= 2 else 0
         
-        # 只对新棋子计算分数
-        for col, piece in enumerate(row_pieces):
-            if piece is not None and piece.is_new:
-                # 基础分
-                score += 1
-                # 与左侧相连
-                if col > 0 and row_pieces[col-1] is not None:
-                    score += 1
-                # 与上方相连
-                if row > 0 and self.scoring_area[row-1][col] is not None:
-                    score += 1
-                # 与下方相连
-                if row < 4 and self.scoring_area[row+1][col] is not None:
-                    score += 1
-                    
-        return score
+    def score_column_round_end(self, row: int, col: int) -> int:
+        """
+        计算指定位置的垂直方向得分，只计算新放置棋子的得分
+        
+        规则:
+        - 检查是否能和垂直方向形成连线（长度≥2）
+        - 如果能形成连线，得分等于线的长度
+        
+        Args:
+            row (int): 行索引
+            col (int): 列索引
+            
+        Returns:
+            int: 得分
+        """
+        piece = self.scoring_area[row][col]
+        if piece is None or not piece.is_new:
+            return 0
+            
+        # 计算垂直连线长度
+        vertical_line = 1
+        # 向上检查
+        up = row - 1
+        while up >= 0 and self.scoring_area[up][col] is not None:
+            vertical_line += 1
+            up -= 1
+        # 向下检查
+        down = row + 1
+        while down < 5 and self.scoring_area[down][col] is not None:
+            vertical_line += 1
+            down += 1
+            
+        return vertical_line if vertical_line >= 2 else 0
         
     def score_row_game_end(self, row: int) -> int:
         """
@@ -233,47 +260,6 @@ class PlayerBoard:
         if all(piece is not None for piece in self.scoring_area[row]):
             return 2
         return 0
-        
-    def score_column_round_end(self, col: int) -> int:
-        """
-        计算指定列的回合结束得分，只计算新放置棋子的得分
-        
-        规则:
-        1. 单个瓷砖:1分
-        2. 相邻连接:每个相邻+1分
-        
-        Args:
-            col (int): 列索引
-            
-        Returns:
-            int: 得分
-        """
-        if not 0 <= col < 5:
-            return 0
-            
-        # 获取列中的瓷砖
-        col_pieces = [self.scoring_area[row][col] for row in range(5)]
-        if not any(p is not None and p.is_new for p in col_pieces):  # 没有新棋子
-            return 0
-            
-        score = 0
-        
-        # 只对新棋子计算分数
-        for row, piece in enumerate(col_pieces):
-            if piece is not None and piece.is_new:
-                # 基础分
-                score += 1
-                # 与上方相连
-                if row > 0 and col_pieces[row-1] is not None:
-                    score += 1
-                # 与左侧相连
-                if col > 0 and self.scoring_area[row][col-1] is not None:
-                    score += 1
-                # 与右侧相连
-                if col < 4 and self.scoring_area[row][col+1] is not None:
-                    score += 1
-                    
-        return score
         
     def score_column_game_end(self, col: int) -> int:
         """
@@ -300,19 +286,32 @@ class PlayerBoard:
         """
         计算回合结束时的得分,并更新玩家总分(self.score)
         
+        规则:
+        - 遍历每个新棋子
+        - 分别计算水平和垂直方向的得分
+        - 如果两个方向都没有形成连线（得分和为0），则得1分
+        - 否则得分为两个方向的得分之和
+        
         Returns:
             int: 本回合得分（不包括之前累积的分数）
         """
         score = 0
         
-        # 计算行得分
+        # 遍历所有位置找出新棋子
         for row in range(5):
-            score += self.score_row_round_end(row)
-            
-        # 计算列得分
-        for col in range(5):
-            score += self.score_column_round_end(col)
-            
+            for col in range(5):
+                piece = self.scoring_area[row][col]
+                if piece is not None and piece.is_new:
+                    # 计算水平和垂直方向的得分
+                    row_score = self.score_row_round_end(row, col)
+                    col_score = self.score_column_round_end(row, col)
+                    
+                    # 如果两个方向都没有形成连线，得1分
+                    if row_score + col_score == 0:
+                        score += 1
+                    else:
+                        score += row_score + col_score
+        
         # 计算扣分
         score += self.calculate_penalty()
         
