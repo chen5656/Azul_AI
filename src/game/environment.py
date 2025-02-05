@@ -54,11 +54,11 @@ class AzulEnv(gym.Env):
         
         # 颜色映射
         self.COLORS = {
-            'BLUE': 0,
-            'YELLOW': 1,
-            'RED': 2,
-            'BLACK': 3,
-            'WHITE': 4
+            'BLUE': 1,    # 修改为与 PieceColor.BLUE.id 匹配
+            'YELLOW': 2,  # 修改为与 PieceColor.YELLOW.id 匹配
+            'RED': 3,     # 修改为与 PieceColor.RED.id 匹配
+            'BLACK': 4,   # 修改为与 PieceColor.BLACK.id 匹配
+            'WHITE': 5    # 修改为与 PieceColor.WHITE.id 匹配
         }
         
         # 初始化游戏状态
@@ -67,8 +67,8 @@ class AzulEnv(gym.Env):
         self.round_count = 0
         
         # 初始化棋盘
-        self.player1_board = PlayerBoard("Player 1")
-        self.player2_board = PlayerBoard("Player 2")
+        self.player1_board = PlayerBoard(x=0, y=0, name="Player 1")
+        self.player2_board = PlayerBoard(x=0, y=400, name="Player 2")
         
         # 初始化游戏组件
         self.piece_pool = []
@@ -275,24 +275,40 @@ class AzulEnv(gym.Env):
         
         # 从圆盘选择
         for disk_idx, disk in enumerate(self.disks):
-            colors_in_disk = set(piece.color for piece in disk)
-            for color in colors_in_disk:
+            # 按颜色分组棋子
+            color_pieces = {}
+            for piece in disk:
+                if not piece.is_first:
+                    if piece.color not in color_pieces:
+                        color_pieces[piece.color] = []
+                    color_pieces[piece.color].append(piece)
+            
+            # 检查每种颜色
+            for color, pieces in color_pieces.items():
                 # 可以放入准备区
                 for row in range(5):
-                    if current_board.can_place_pieces(row, color):
-                        valid_actions.append((0, disk_idx, color, 0, row))
+                    if current_board.can_place_pieces(row, pieces):
+                        valid_actions.append((0, disk_idx, color.id, 0, row))
                 # 总是可以放入扣分区
-                valid_actions.append((0, disk_idx, color, 1, 0))
+                valid_actions.append((0, disk_idx, color.id, 1, 0))
                 
         # 从待定区选择
-        colors_in_waiting = set(piece.color for piece in self.waiting_area if not piece.is_first)
-        for color in colors_in_waiting:
+        # 按颜色分组棋子
+        waiting_color_pieces = {}
+        for piece in self.waiting_area:
+            if not piece.is_first:
+                if piece.color not in waiting_color_pieces:
+                    waiting_color_pieces[piece.color] = []
+                waiting_color_pieces[piece.color].append(piece)
+        
+        # 检查每种颜色
+        for color, pieces in waiting_color_pieces.items():
             # 可以放入准备区
             for row in range(5):
-                if current_board.can_place_pieces(row, color):
-                    valid_actions.append((1, 0, color, 0, row))
+                if current_board.can_place_pieces(row, pieces):
+                    valid_actions.append((1, 0, color.id, 0, row))
             # 总是可以放入扣分区
-            valid_actions.append((1, 0, color, 1, 0))
+            valid_actions.append((1, 0, color.id, 1, 0))
             
         return valid_actions
         
@@ -574,23 +590,38 @@ class AzulEnv(gym.Env):
         Args:
             source_type (int): 源位置类型 (0=圆盘, 1=待定区)
             source_idx (int): 源位置索引
-            color (int): 选择的颜色
+            color (int): 选择的颜色 (1=蓝, 2=黄, 3=红, 4=黑, 5=白)
             target_type (int): 目标位置类型 (0=准备区, 1=扣分区)
             target_idx (int): 目标位置索引
         """
         current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        
+        # 颜色值映射到PieceColor枚举
+        color_mapping = {
+            1: PieceColor.BLUE,
+            2: PieceColor.YELLOW,
+            3: PieceColor.RED,
+            4: PieceColor.BLACK,
+            5: PieceColor.WHITE
+        }
+        piece_color = color_mapping.get(color)
+        if piece_color is None:
+            return  # 非法颜色，直接返回
         
         # 获取要移动的棋子
         pieces_to_move = []
         other_pieces = []
         source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
         
+        # 创建源位置的副本，以便安全地修改
+        source_pieces_copy = source_pieces.copy()
+        
         # 从源位置收集棋子
-        for piece in source_pieces[:]:
-            if piece.color == PieceColor(color) or piece.is_first:
+        for piece in source_pieces_copy:
+            if piece.color == piece_color or piece.is_first:
                 pieces_to_move.append(piece)
                 source_pieces.remove(piece)
-            else:
+            elif source_type == 0:  # 只有从圆盘取棋子时才收集其他颜色
                 other_pieces.append(piece)
                 source_pieces.remove(piece)
                 
@@ -600,12 +631,14 @@ class AzulEnv(gym.Env):
             
         # 处理棋子放置
         if target_type == 0:  # 放入准备区
-            # 确保从右到左填充
-            row = current_board.prep_area[target_idx]
-            start_idx = len(row) - 1
-            
             # 检查是否可以放置
             if not current_board.can_place_pieces(target_idx, pieces_to_move):
+                # 如果不能放置，将棋子放回原位
+                if source_type == 0:
+                    self.disks[source_idx].extend(pieces_to_move)
+                    self.disks[source_idx].extend(other_pieces)
+                else:
+                    self.waiting_area.extend(pieces_to_move)
                 return  # 非法动作，直接返回
                 
             # 分离先手标记和普通棋子
@@ -613,7 +646,7 @@ class AzulEnv(gym.Env):
             first_piece = next((p for p in pieces_to_move if p.is_first), None)
             
             # 放置普通棋子
-            remaining = current_board.add_pieces_from_right(target_idx, normal_pieces)
+            remaining = current_board.add_pieces_to_prep_area(target_idx, normal_pieces)
             if remaining:
                 current_board.add_to_penalty(remaining)
                 

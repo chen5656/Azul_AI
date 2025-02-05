@@ -103,3 +103,10 @@ trainer.train(num_episodes=10000)
 - OpenAI Gym 框架
 - PyTorch 深度学习框架
 - Azul 棋盘游戏设计者 Michael Kiesling
+
+
+接下来，我们需要：
+实现强化学习算法（如PPO）
+实现经验收集和回放机制
+实现训练循环和评估系统
+你想从哪个部分开始？
