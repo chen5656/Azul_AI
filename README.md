@@ -1,49 +1,105 @@
-# Azul_AI
+# Azul AI
 
-这是一个基于人工智能的Azul棋盘游戏项目。通过结合深度神经网络、遗传算法和强化学习，训练AI代理来学习和掌握Azul游戏的策略。
+使用深度强化学习训练AI来玩Azul棋盘游戏。
 
-## 快速开始
+## 项目状态
 
-### 依赖要求
-- Python 3.8+
-- PyTorch 1.9+
-- NumPy 1.21+
-- Pygame 2.1+
+- [x] 游戏环境实现完成
+- [x] 游戏规则和记分系统实现完成
+- [x] 基础测试用例编写完成
+- [ ] AI训练框架开发中
+- [ ] AI模型训练中
 
-### 安装步骤
+## 项目结构
+
+```
+src/
+├── game/           # 游戏核心实现
+│   ├── board.py    # 棋盘类
+│   ├── piece.py    # 棋子类
+│   ├── config.py   # 配置类
+│   └── environment.py  # 游戏环境类
+├── ai/             # AI相关实现
+│   ├── models/     # 神经网络模型
+│   ├── algorithms/ # 强化学习算法
+│   ├── trainer.py  # 训练器
+│   └── evaluator.py # 评估器
+└── utils/          # 工具函数
+tests/              # 测试用例
+docs/               # 文档
+```
+
+## 安装
+
 1. 克隆仓库：
-    git clone https://github.com/your-username/Azul_AI.git
-    cd Azul_AI
+```bash
+git clone https://github.com/yourusername/azul-ai.git
+cd azul-ai
+```
 
-2. 安装依赖：
-    conda env create -f environment.yml
-    conda activate azul-ai
-    pip install -e .
+2. 创建并激活虚拟环境：
+```bash
+conda env create -f environment.yml
+conda activate azul
+pip install -e .
+```
 
-3. 验证安装：
-    python -m unittest discover tests
+## 使用方法
 
-## 文档
-- [游戏规则](docs/game_rules.md)
-- [API文档](docs/api.md)
-- [开发指南](docs/development_guide.md)
+### 运行游戏环境
 
-## 开发进度追踪
+```python
+from src.game.environment import AzulEnv
 
-### 当前开发重点
-- 游戏环境（Environment）类的实现
-- 基础测试用例的编写
-- 状态向量化设计
+env = AzulEnv()
+obs = env.reset()
 
-### 每周进度更新
-#### 2024-W1
-- [x] 完成项目基础架构
-- [x] 实现Piece和PlayerBoard核心类
-- [ ] Environment类基础功能实现中
+done = False
+while not done:
+    action = env.action_space.sample()  # 随机动作，用于测试
+    obs, reward, done, info = env.step(action)
+    env.render()
+```
+
+### 训练AI代理（即将推出）
+
+```python
+from src.ai.trainer import Trainer
+from src.ai.models import AzulNet
+from src.ai.algorithms import PPO
+
+# 创建模型和训练器
+model = AzulNet()
+trainer = Trainer(model, algorithm=PPO())
+
+# 开始训练
+trainer.train(num_episodes=10000)
+```
+
+## 开发路线图
+
+1. 游戏环境实现 ✅
+2. AI训练框架开发 🚧
+3. 模型训练和优化 📅
+4. Web界面开发 📅
+5. 在线训练和对战系统 📅
+
+## 贡献指南
+
+欢迎贡献代码！请遵循以下步骤：
+
+1. Fork 本仓库
+2. 创建您的特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交您的更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启一个 Pull Request
 
 ## 许可证
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
 
-## 联系方式
-- 项目维护者：[Huajun Chen]
-- 项目链接：[https://github.com/your-username/Azul_AI](https://github.com/your-username/Azul_AI)
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 致谢
+
+- OpenAI Gym 框架
+- PyTorch 深度学习框架
+- Azul 棋盘游戏设计者 Michael Kiesling

@@ -111,17 +111,32 @@ class AzulEnv(gym.Env):
             
         # 执行动作
         source_type, source_idx, color, target_type, target_idx = action
-        reward = self._execute_action(source_type, source_idx, color, target_type, target_idx)
+        self._execute_action(source_type, source_idx, color, target_type, target_idx)
+        
+        # 计算动作奖励
+        action_result = {
+            'target_type': target_type,
+            'is_valid': True,
+            'is_opponent': False  # 当前玩家的动作
+        }
+        reward = self._calculate_reward(action_result)
         
         # 检查是否需要结算
         if self._need_scoring():
-            scoring_reward = self._perform_scoring()
-            reward += scoring_reward
+            scoring_result = {
+                'score': self._perform_scoring(),
+                'is_opponent': False  # 当前玩家的得分
+            }
+            reward += self._calculate_reward(scoring_result)
             
         # 检查游戏是否结束
         done = self._check_game_end()
         if done:
-            reward += self._calculate_final_reward()
+            final_result = {
+                'score': self._calculate_final_reward(),
+                'is_opponent': False  # 当前玩家的最终得分
+            }
+            reward += self._calculate_reward(final_result)
             
         # 切换玩家
         if not done:
@@ -281,73 +296,48 @@ class AzulEnv(gym.Env):
             
         return valid_actions
         
-    def _execute_action(self, source_type: int, source_idx: int, color: int, 
-                       target_type: int, target_idx: int) -> float:
+    def _calculate_reward(self, action_result: Dict) -> float:
         """
-        执行动作并返回即时奖励
+        计算动作的奖励值
+        
+        奖励规则：
+        对于当前玩家：
+        1. 成功放置到准备区：+0.1
+        2. 放置到扣分区：-0.1
+        3. 非法动作：-1.0
+        4. 结算时的得分：实际得分
+        
+        对于对手动作：
+        1. 对手成功放置到准备区：-0.1
+        2. 对手放置到扣分区：+0.1
+        3. 对手结算时的得分：-实际得分
         
         Args:
-            source_type (int): 源位置类型 (0=圆盘, 1=待定区)
-            source_idx (int): 源位置索引
-            color (int): 选择的颜色
-            target_type (int): 目标位置类型 (0=准备区, 1=扣分区)
-            target_idx (int): 目标位置索引
-            
+            action_result (Dict): 动作执行的结果，包含：
+                - score: 得分（如果有结算）
+                - is_valid: 动作是否合法
+                - target_type: 目标位置类型
+                - is_opponent: 是否是对手的动作
+                
         Returns:
-            float: 即时奖励值
+            float: 奖励值
         """
-        current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        # 获取动作是否来自对手
+        is_opponent = action_result.get('is_opponent', False)
+        multiplier = -1 if is_opponent else 1
         
-        # 获取要移动的棋子
-        pieces_to_move = []
-        other_pieces = []
-        source_pieces = self.disks[source_idx] if source_type == 0 else self.waiting_area
-        
-        # 从源位置收集棋子
-        for piece in source_pieces[:]:
-            if piece.color == PieceColor(color) or piece.is_first:
-                pieces_to_move.append(piece)
-                source_pieces.remove(piece)
-            else:
-                other_pieces.append(piece)
-                source_pieces.remove(piece)
-                
-        # 如果是从圆盘取棋子，将其他颜色的棋子移到待定区
-        if source_type == 0 and other_pieces:
-            self.waiting_area.extend(other_pieces)
+        # 如果是非法动作
+        if not action_result.get('is_valid', True):
+            return -1.0 * multiplier
             
-        # 处理棋子放置
-        if target_type == 0:  # 放入准备区
-            # 确保从右到左填充
-            row = current_board.prep_area[target_idx]
-            start_idx = len(row) - 1
+        # 如果有结算分数
+        if 'score' in action_result:
+            return float(action_result['score']) * multiplier
             
-            # 检查是否可以放置
-            if not current_board.can_place_pieces(target_idx, pieces_to_move):
-                return -1.0  # 非法动作惩罚
-                
-            # 分离先手标记和普通棋子
-            normal_pieces = [p for p in pieces_to_move if not p.is_first]
-            first_piece = next((p for p in pieces_to_move if p.is_first), None)
-            
-            # 放置普通棋子
-            remaining = current_board.add_pieces_from_right(target_idx, normal_pieces)
-            if remaining:
-                current_board.add_to_penalty(remaining)
-                
-            # 处理先手标记
-            if first_piece:
-                current_board.add_to_penalty([first_piece])
-                
-        else:  # 直接放入扣分区
-            current_board.add_to_penalty(pieces_to_move)
-            
-        return 0.1 if target_type == 0 else -0.1
-        
-    def _calculate_reward(self, action_result: Dict) -> float:
-        """计算奖励值"""
-        # 实现奖励计算逻辑
-        pass 
+        # 根据放置位置给予基础奖励
+        target_type = action_result.get('target_type', 0)
+        base_reward = 0.1 if target_type == 0 else -0.1
+        return base_reward * multiplier
 
     def render(self, mode='human'):
         """
@@ -394,28 +384,82 @@ class AzulEnv(gym.Env):
         return piece_pool
         
     def _need_scoring(self) -> bool:
-        """检查是否需要进行结算"""
-        # TODO: 实现结算检查
-        pass
+        """
+        检查是否需要进行结算
+        
+        结算条件：
+        1. 所有圆盘为空
+        2. 待定区为空
+        3. 当前玩家的准备区有棋子
+        
+        Returns:
+            bool: 如果需要结算返回True，否则返回False
+        """
+        # 获取当前玩家的棋盘
+        current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        
+        # 检查是否所有圆盘为空
+        if any(disk for disk in self.disks):
+            return False
+            
+        # 检查待定区是否为空
+        if self.waiting_area:
+            return False
+            
+        # 检查当前玩家的准备区是否有棋子
+        has_pieces = False
+        for row in current_board.prep_area:
+            if any(piece is not None for piece in row):
+                has_pieces = True
+                break
+                
+        if has_pieces:
+            self.state = GameState.SCORING
+            return True
+            
+        return False
         
     def _perform_scoring(self) -> float:
         """
         执行结算并返回得分
         
+        结算流程：
+        1. 将当前玩家准备区的棋子移动到结算区
+        2. 计算回合得分
+        3. 清空准备区
+        4. 将扣分区的棋子移到废弃池
+        
         Returns:
             float: 结算得到的分数
         """
-        total_score = 0.0
+        current_board = self.player1_board if self.current_player == 1 else self.player2_board
         
-        # 处理玩家1的棋盘
-        pieces = self.player1_board.clear_penalty_area()
+        # 遍历准备区的每一行
+        for row_idx, row in enumerate(current_board.prep_area):
+            # 检查是否有完整的一行
+            if all(piece is not None for piece in row):
+                # 获取棋子颜色
+                color = row[0].color
+                # 找到结算区对应行中这个颜色应该放的位置
+                target_col = current_board.SCORING_PATTERN[row_idx].index(color)
+                # 将棋子放入结算区
+                piece = row[0]
+                piece.is_new = True  # 标记为新放置的棋子
+                current_board.scoring_area[row_idx][target_col] = piece
+                # 清空准备区这一行
+                current_board.prep_area[row_idx] = [None] * len(row)
+        
+        # 计算回合得分
+        round_score = current_board.calculate_round_end_score()
+        
+        # 处理扣分区
+        pieces = current_board.clear_penalty_area()
         self.waste_pool.extend(pieces)
         
-        # 处理玩家2的棋盘
-        pieces = self.player2_board.clear_penalty_area()
-        self.waste_pool.extend(pieces)
+        # 更新游戏状态
+        self.state = GameState.ROUND_END
         
-        return total_score
+        return float(round_score)
         
     def _check_game_end(self) -> bool:
         """
@@ -460,9 +504,26 @@ class AzulEnv(gym.Env):
         return False
         
     def _calculate_final_reward(self) -> float:
-        """计算游戏结束时的最终奖励"""
-        # TODO: 实现最终奖励计算
-        pass
+        """
+        计算游戏结束时的最终奖励
+        
+        最终奖励包括：
+        1. 完整行奖励：每行2分
+        2. 完整列奖励：每列7分
+        3. 颜色完成奖励：每种颜色10分
+        
+        Returns:
+            float: 最终奖励值
+        """
+        current_board = self.player1_board if self.current_player == 1 else self.player2_board
+        
+        # 计算游戏结束时的额外得分
+        final_score = current_board.calculate_game_end_score()
+        
+        # 更新玩家总分
+        current_board.score += final_score
+        
+        return float(final_score)
         
     def _get_info(self) -> Dict:
         """获取额外信息"""
@@ -505,17 +566,10 @@ class AzulEnv(gym.Env):
         self.round_count = 0
         self.piece_pool = self._initialize_piece_pool()
         
-    def _initialize_game(self):
-        """初始化游戏状态"""
-        self.state = GameState.INIT
-        self.current_player = 1
-        self.round_count = 0
-        self.piece_pool = self._initialize_piece_pool()
-        
     def _execute_action(self, source_type: int, source_idx: int, color: int, 
-                       target_type: int, target_idx: int) -> float:
+                       target_type: int, target_idx: int):
         """
-        执行动作并返回即时奖励
+        执行动作
         
         Args:
             source_type (int): 源位置类型 (0=圆盘, 1=待定区)
@@ -523,9 +577,6 @@ class AzulEnv(gym.Env):
             color (int): 选择的颜色
             target_type (int): 目标位置类型 (0=准备区, 1=扣分区)
             target_idx (int): 目标位置索引
-            
-        Returns:
-            float: 即时奖励值
         """
         current_board = self.player1_board if self.current_player == 1 else self.player2_board
         
@@ -555,7 +606,7 @@ class AzulEnv(gym.Env):
             
             # 检查是否可以放置
             if not current_board.can_place_pieces(target_idx, pieces_to_move):
-                return -1.0  # 非法动作惩罚
+                return  # 非法动作，直接返回
                 
             # 分离先手标记和普通棋子
             normal_pieces = [p for p in pieces_to_move if not p.is_first]
@@ -571,6 +622,4 @@ class AzulEnv(gym.Env):
                 current_board.add_to_penalty([first_piece])
                 
         else:  # 直接放入扣分区
-            current_board.add_to_penalty(pieces_to_move)
-            
-        return 0.1 if target_type == 0 else -0.1 
+            current_board.add_to_penalty(pieces_to_move) 
